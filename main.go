@@ -19,9 +19,7 @@ type apiConfig struct {
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		fmt.Printf("middleware handler hit - hits before %d\n", cfg.fileserverHits.Load())
 		cfg.fileserverHits.Add(1)
-		fmt.Printf("middleware handler hit - hits after %d\n", cfg.fileserverHits.Load())
 		next.ServeHTTP(w, req)
 	})
 }
