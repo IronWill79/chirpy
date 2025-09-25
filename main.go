@@ -1,14 +1,18 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"sync/atomic"
 
 	"github.com/IronWill79/chirpy/internal/chirp"
+	"github.com/IronWill79/chirpy/internal/database"
 	"github.com/IronWill79/chirpy/internal/validation"
+	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
 
@@ -20,6 +24,7 @@ var metricsTemplate = `<html>
 </html>`
 
 type apiConfig struct {
+	dbQueries      *database.Queries
 	fileserverHits atomic.Int32
 }
 
@@ -98,7 +103,14 @@ func validationHandler(w http.ResponseWriter, req *http.Request) {
 }
 
 func main() {
-	apiCfg := apiConfig{}
+	godotenv.Load()
+	dbURL := os.Getenv("DB_URL")
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		fmt.Printf("Error connecting to database: %v\n", err)
+	}
+	dbQueries := database.New(db)
+	apiCfg := apiConfig{dbQueries: dbQueries}
 	mux := http.NewServeMux()
 	mux.Handle("/app/",
 		apiCfg.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir(".")))),
@@ -111,7 +123,7 @@ func main() {
 		Addr:    ":8080",
 		Handler: mux,
 	}
-	err := server.ListenAndServe()
+	err = server.ListenAndServe()
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 	}
