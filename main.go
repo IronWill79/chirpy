@@ -8,10 +8,12 @@ import (
 	"net/http"
 	"os"
 	"sync/atomic"
+	"time"
 
 	"github.com/IronWill79/chirpy/internal/chirp"
 	"github.com/IronWill79/chirpy/internal/database"
 	"github.com/IronWill79/chirpy/internal/validation"
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
@@ -26,6 +28,17 @@ var metricsTemplate = `<html>
 type apiConfig struct {
 	dbQueries      *database.Queries
 	fileserverHits atomic.Int32
+}
+
+type User struct {
+	Email string `json:"email"`
+}
+
+type UserResponse struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Email     string    `json:"email"`
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -43,9 +56,46 @@ func (cfg *apiConfig) handleDisplayMetrics(w http.ResponseWriter, req *http.Requ
 
 func (cfg *apiConfig) handleResetMetrics(w http.ResponseWriter, req *http.Request) {
 	cfg.fileserverHits.Store(0)
+	cfg.dbQueries.DeleteUsers(req.Context())
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("Metrics reset"))
+}
+
+func (cfg *apiConfig) handleCreateUser(w http.ResponseWriter, req *http.Request) {
+	decoder := json.NewDecoder(req.Body)
+	u := User{}
+	err := decoder.Decode(&u)
+	if err != nil {
+		log.Printf("Error decoding parameters: %s", err)
+		err = respondWithError(w, 500, "Something went wrong")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
+	user, err := cfg.dbQueries.CreateUser(req.Context(), u.Email)
+	if err != nil {
+		log.Printf("Error creating user: %s", err)
+		err = respondWithError(w, 500, "Something went wrong")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
+	respBody := UserResponse{
+		ID:        user.ID,
+		CreatedAt: user.CreatedAt,
+		UpdatedAt: user.UpdatedAt,
+		Email:     user.Email,
+	}
+	err = respondWithJSON(w, 201, respBody)
+	if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+	}
 }
 
 func readinessHandler(w http.ResponseWriter, req *http.Request) {
@@ -119,6 +169,7 @@ func main() {
 	mux.HandleFunc("POST /admin/reset", apiCfg.handleResetMetrics)
 	mux.HandleFunc("GET /api/healthz", readinessHandler)
 	mux.HandleFunc("POST /api/validate_chirp", validationHandler)
+	mux.HandleFunc("POST /api/users", apiCfg.handleCreateUser)
 	server := http.Server{
 		Addr:    ":8080",
 		Handler: mux,
