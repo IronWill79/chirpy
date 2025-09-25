@@ -118,6 +118,34 @@ func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) error
 	return nil
 }
 
+func (cfg *apiConfig) handleListChirps(w http.ResponseWriter, req *http.Request) {
+	chirps, err := cfg.dbQueries.ListChirps(req.Context())
+	if err != nil {
+		log.Printf("Error getting chirps: %s", err)
+		err = respondWithError(w, 500, "Something went wrong")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
+	respBody := []chirp.Chirp{}
+	for _, c := range chirps {
+		respBody = append(respBody, chirp.Chirp{
+			ID:        c.ID,
+			CreatedAt: c.CreatedAt,
+			UpdatedAt: c.UpdatedAt,
+			Body:      c.Body,
+			UserID:    c.UserID,
+		})
+	}
+	err = respondWithJSON(w, 200, respBody)
+	if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+	}
+}
+
 func (cfg *apiConfig) handleCreateChirp(w http.ResponseWriter, req *http.Request) {
 	decoder := json.NewDecoder(req.Body)
 	c := chirp.Chirp{}
@@ -183,6 +211,7 @@ func main() {
 	mux.HandleFunc("GET /admin/metrics", apiCfg.handleDisplayMetrics)
 	mux.HandleFunc("POST /admin/reset", apiCfg.handleResetMetrics)
 	mux.HandleFunc("GET /api/healthz", readinessHandler)
+	mux.HandleFunc("GET /api/chirps", apiCfg.handleListChirps)
 	mux.HandleFunc("POST /api/chirps", apiCfg.handleCreateChirp)
 	mux.HandleFunc("POST /api/users", apiCfg.handleCreateUser)
 	server := http.Server{
