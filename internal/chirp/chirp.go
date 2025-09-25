@@ -5,7 +5,8 @@ import "strings"
 var profanities = []string{"kerfuffle", "sharbert", "fornax"}
 
 type Chirp struct {
-	Body string `json:"body"`
+	Body   string `json:"body"`
+	UserID string `json:"user_id"`
 }
 
 func CleanChirp(chirp string) string {
