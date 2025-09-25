@@ -12,7 +12,6 @@ import (
 
 	"github.com/IronWill79/chirpy/internal/chirp"
 	"github.com/IronWill79/chirpy/internal/database"
-	"github.com/IronWill79/chirpy/internal/validation"
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
@@ -59,7 +58,7 @@ func (cfg *apiConfig) handleResetMetrics(w http.ResponseWriter, req *http.Reques
 	cfg.dbQueries.DeleteUsers(req.Context())
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("Metrics reset"))
+	w.Write([]byte("Metrics and users reset"))
 }
 
 func (cfg *apiConfig) handleCreateUser(w http.ResponseWriter, req *http.Request) {
@@ -119,7 +118,7 @@ func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) error
 	return nil
 }
 
-func validationHandler(w http.ResponseWriter, req *http.Request) {
+func (cfg *apiConfig) handleCreateChirp(w http.ResponseWriter, req *http.Request) {
 	decoder := json.NewDecoder(req.Body)
 	c := chirp.Chirp{}
 	err := decoder.Decode(&c)
@@ -142,10 +141,26 @@ func validationHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	cleanedBody := chirp.CleanChirp(c.Body)
-	respBody := validation.ChirpValidationSuccess{
-		CleanedBody: cleanedBody,
+	ch, err := cfg.dbQueries.CreateChirp(req.Context(), database.CreateChirpParams{
+		Body:   cleanedBody,
+		UserID: c.UserID,
+	})
+	if err != nil {
+		log.Printf("Error creating chirp: %s", err)
+		err = respondWithError(w, 500, "Something went wrong")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
 	}
-	err = respondWithJSON(w, 200, respBody)
+	err = respondWithJSON(w, 201, chirp.ChirpResponse{
+		ID:        ch.ID,
+		CreatedAt: ch.CreatedAt,
+		UpdatedAt: ch.UpdatedAt,
+		Body:      ch.Body,
+		UserID:    ch.UserID,
+	})
 	if err != nil {
 		log.Printf("Error marshalling JSON: %s", err)
 		w.WriteHeader(500)
@@ -168,7 +183,7 @@ func main() {
 	mux.HandleFunc("GET /admin/metrics", apiCfg.handleDisplayMetrics)
 	mux.HandleFunc("POST /admin/reset", apiCfg.handleResetMetrics)
 	mux.HandleFunc("GET /api/healthz", readinessHandler)
-	mux.HandleFunc("POST /api/validate_chirp", validationHandler)
+	mux.HandleFunc("POST /api/chirps", apiCfg.handleCreateChirp)
 	mux.HandleFunc("POST /api/users", apiCfg.handleCreateUser)
 	server := http.Server{
 		Addr:    ":8080",
