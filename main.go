@@ -9,6 +9,7 @@ import (
 
 	"github.com/IronWill79/chirpy/internal/chirp"
 	"github.com/IronWill79/chirpy/internal/validation"
+	_ "github.com/lib/pq"
 )
 
 var metricsTemplate = `<html>
