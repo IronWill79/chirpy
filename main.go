@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/IronWill79/chirpy/internal/auth"
 	"github.com/IronWill79/chirpy/internal/chirp"
 	"github.com/IronWill79/chirpy/internal/database"
 	"github.com/google/uuid"
@@ -30,7 +31,8 @@ type apiConfig struct {
 }
 
 type User struct {
-	Email string `json:"email"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
 }
 
 type UserResponse struct {
@@ -74,7 +76,20 @@ func (cfg *apiConfig) handleCreateUser(w http.ResponseWriter, req *http.Request)
 		}
 		return
 	}
-	user, err := cfg.dbQueries.CreateUser(req.Context(), u.Email)
+	hashedPassword, err := auth.HashPassword(u.Password)
+	if err != nil {
+		log.Printf("Error hashing password: %s", err)
+		err = respondWithError(w, 500, "Something went wrong")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
+	user, err := cfg.dbQueries.CreateUser(req.Context(), database.CreateUserParams{
+		Email:          u.Email,
+		HashedPassword: hashedPassword,
+	})
 	if err != nil {
 		log.Printf("Error creating user: %s", err)
 		err = respondWithError(w, 500, "Something went wrong")
@@ -195,6 +210,86 @@ func (cfg *apiConfig) handleCreateChirp(w http.ResponseWriter, req *http.Request
 	}
 }
 
+func (cfg *apiConfig) handleGetChirpById(w http.ResponseWriter, req *http.Request) {
+	id_string := req.PathValue("chirp_id")
+	id, err := uuid.Parse(id_string)
+	if err != nil {
+		log.Printf("Error parsing UUID: %s", err)
+		err = respondWithError(w, 500, "Something went wrong")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
+	c, err := cfg.dbQueries.GetChirpById(req.Context(), id)
+	if err != nil {
+		log.Printf("Error retrieving chirp: %s", err)
+		err = respondWithError(w, 404, "Something went wrong")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
+	err = respondWithJSON(w, 200, chirp.Chirp{
+		ID:        c.ID,
+		CreatedAt: c.CreatedAt,
+		UpdatedAt: c.UpdatedAt,
+		Body:      c.Body,
+		UserID:    c.UserID,
+	})
+	if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+	}
+}
+
+func (cfg *apiConfig) handleUserLogin(w http.ResponseWriter, req *http.Request) {
+	decoder := json.NewDecoder(req.Body)
+	u := User{}
+	err := decoder.Decode(&u)
+	if err != nil {
+		log.Printf("Error decoding parameters: %s", err)
+		err = respondWithError(w, 500, "Something went wrong")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
+	user, err := cfg.dbQueries.GetUserByEmail(req.Context(), u.Email)
+	if err != nil {
+		log.Printf("Error retrieving user: %s", err)
+		err = respondWithError(w, 401, "Incorrect email or password")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
+	ok, err := auth.CheckPasswordHash(u.Password, user.HashedPassword)
+	if err != nil || !ok {
+		log.Printf("Error checking password against hash: %s", err)
+		err = respondWithError(w, 401, "Incorrect email or password")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
+	err = respondWithJSON(w, 200, UserResponse{
+		ID:        user.ID,
+		CreatedAt: user.CreatedAt,
+		UpdatedAt: user.UpdatedAt,
+		Email:     user.Email,
+	})
+	if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+	}
+}
+
 func main() {
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
@@ -212,7 +307,9 @@ func main() {
 	mux.HandleFunc("POST /admin/reset", apiCfg.handleResetMetrics)
 	mux.HandleFunc("GET /api/healthz", readinessHandler)
 	mux.HandleFunc("GET /api/chirps", apiCfg.handleListChirps)
+	mux.HandleFunc("GET /api/chirps/{chirp_id}", apiCfg.handleGetChirpById)
 	mux.HandleFunc("POST /api/chirps", apiCfg.handleCreateChirp)
+	mux.HandleFunc("POST /api/login", apiCfg.handleUserLogin)
 	mux.HandleFunc("POST /api/users", apiCfg.handleCreateUser)
 	server := http.Server{
 		Addr:    ":8080",
