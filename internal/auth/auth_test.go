@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"net/http"
 	"testing"
 	"time"
 
@@ -9,8 +10,9 @@ import (
 )
 
 var testID = uuid.New()
-var testSecret = "testSecret"
 var testPassword = "testing!"
+var testSecret = "testSecret"
+var testToken = "testing"
 
 func TestHashPassword(t *testing.T) {
 	hashedPassword, err := HashPassword(testPassword)
@@ -33,4 +35,12 @@ func TestExpiredToken(t *testing.T) {
 	assert.NoError(t, err)
 	_, err = ValidateJWT(token, testSecret)
 	assert.Error(t, err)
+}
+
+func TestBearerToken(t *testing.T) {
+	headers := http.Header{}
+	headers.Add("Authorization", "Bearer "+testToken)
+	token, err := GetBearerToken(headers)
+	assert.NoError(t, err)
+	assert.Equal(t, token, testToken)
 }

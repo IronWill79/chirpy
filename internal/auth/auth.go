@@ -1,7 +1,10 @@
 package auth
 
 import (
+	"errors"
 	"log"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/alexedwards/argon2id"
@@ -52,4 +55,12 @@ func ValidateJWT(tokenString, tokenSecret string) (uuid.UUID, error) {
 		return uuid.New(), err
 	}
 	return id, nil
+}
+
+func GetBearerToken(headers http.Header) (string, error) {
+	tokenString := headers.Get("Authorization")
+	if tokenString == "" || !strings.Contains(tokenString, "Bearer ") {
+		return "", errors.New("missing bearer token")
+	}
+	return strings.SplitN(tokenString, " ", 2)[1], nil
 }
