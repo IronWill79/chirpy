@@ -28,11 +28,13 @@ var metricsTemplate = `<html>
 type apiConfig struct {
 	dbQueries      *database.Queries
 	fileserverHits atomic.Int32
+	jwtSecret      string
 }
 
 type User struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
+	Email     string `json:"email"`
+	Password  string `json:"password"`
+	ExpiresIn int    `json:"expires_in_seconds,omitempty"`
 }
 
 type UserResponse struct {
@@ -40,6 +42,7 @@ type UserResponse struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Email     string    `json:"email"`
+	Token     string    `json:"token"`
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -162,9 +165,29 @@ func (cfg *apiConfig) handleListChirps(w http.ResponseWriter, req *http.Request)
 }
 
 func (cfg *apiConfig) handleCreateChirp(w http.ResponseWriter, req *http.Request) {
+	token, err := auth.GetBearerToken(req.Header)
+	if err != nil {
+		log.Printf("Error getting bearer token: %s", err)
+		err = respondWithError(w, 500, "Something went wrong")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
+	id, err := auth.ValidateJWT(token, cfg.jwtSecret)
+	if err != nil {
+		log.Printf("Error validating JWT: %s", err)
+		err = respondWithError(w, 401, "Unauthorized")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
 	decoder := json.NewDecoder(req.Body)
 	c := chirp.Chirp{}
-	err := decoder.Decode(&c)
+	err = decoder.Decode(&c)
 	if err != nil {
 		log.Printf("Error decoding parameters: %s", err)
 		err = respondWithError(w, 500, "Something went wrong")
@@ -186,7 +209,7 @@ func (cfg *apiConfig) handleCreateChirp(w http.ResponseWriter, req *http.Request
 	cleanedBody := chirp.CleanChirp(c.Body)
 	ch, err := cfg.dbQueries.CreateChirp(req.Context(), database.CreateChirpParams{
 		Body:   cleanedBody,
-		UserID: c.UserID,
+		UserID: id,
 	})
 	if err != nil {
 		log.Printf("Error creating chirp: %s", err)
@@ -278,11 +301,26 @@ func (cfg *apiConfig) handleUserLogin(w http.ResponseWriter, req *http.Request) 
 		}
 		return
 	}
+	expiresIn := 60 * 60
+	if u.ExpiresIn != 0 && u.ExpiresIn < expiresIn {
+		expiresIn = u.ExpiresIn
+	}
+	token, err := auth.MakeJWT(user.ID, cfg.jwtSecret, time.Duration(expiresIn)*time.Second)
+	if err != nil {
+		log.Printf("Error creating JWT: %s", err)
+		err = respondWithError(w, 500, "Something went wrong")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
 	err = respondWithJSON(w, 200, UserResponse{
 		ID:        user.ID,
 		CreatedAt: user.CreatedAt,
 		UpdatedAt: user.UpdatedAt,
 		Email:     user.Email,
+		Token:     token,
 	})
 	if err != nil {
 		log.Printf("Error marshalling JSON: %s", err)
@@ -293,12 +331,13 @@ func (cfg *apiConfig) handleUserLogin(w http.ResponseWriter, req *http.Request) 
 func main() {
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
+	jwtSecret := os.Getenv("JWT_SECRET")
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		fmt.Printf("Error connecting to database: %v\n", err)
 	}
 	dbQueries := database.New(db)
-	apiCfg := apiConfig{dbQueries: dbQueries}
+	apiCfg := apiConfig{dbQueries: dbQueries, jwtSecret: jwtSecret}
 	mux := http.NewServeMux()
 	mux.Handle("/app/",
 		apiCfg.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir(".")))),
