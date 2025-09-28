@@ -32,17 +32,21 @@ type apiConfig struct {
 }
 
 type User struct {
-	Email     string `json:"email"`
-	Password  string `json:"password"`
-	ExpiresIn int    `json:"expires_in_seconds,omitempty"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
 }
 
 type UserResponse struct {
-	ID        uuid.UUID `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Email     string    `json:"email"`
-	Token     string    `json:"token"`
+	ID           uuid.UUID `json:"id"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	Email        string    `json:"email"`
+	Token        string    `json:"token"`
+	RefreshToken string    `json:"refresh_token"`
+}
+
+type RefreshResponse struct {
+	Token string `json:"token"`
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -301,11 +305,7 @@ func (cfg *apiConfig) handleUserLogin(w http.ResponseWriter, req *http.Request) 
 		}
 		return
 	}
-	expiresIn := 60 * 60
-	if u.ExpiresIn != 0 && u.ExpiresIn < expiresIn {
-		expiresIn = u.ExpiresIn
-	}
-	token, err := auth.MakeJWT(user.ID, cfg.jwtSecret, time.Duration(expiresIn)*time.Second)
+	token, err := auth.MakeJWT(user.ID, cfg.jwtSecret, time.Hour)
 	if err != nil {
 		log.Printf("Error creating JWT: %s", err)
 		err = respondWithError(w, 500, "Something went wrong")
@@ -315,15 +315,108 @@ func (cfg *apiConfig) handleUserLogin(w http.ResponseWriter, req *http.Request) 
 		}
 		return
 	}
+	refreshToken, err := auth.MakeRefreshToken()
+	if err != nil {
+		log.Printf("Error creating refresh token: %s", err)
+		err = respondWithError(w, 500, "Something went wrong")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
+	r, err := cfg.dbQueries.CreateRefreshToken(req.Context(), database.CreateRefreshTokenParams{
+		Token:     refreshToken,
+		UserID:    user.ID,
+		ExpiresAt: time.Now().Add(60 * 24 * time.Hour),
+	})
+	if err != nil {
+		log.Printf("Error saving refresh token in DB: %s", err)
+		err = respondWithError(w, 500, "Something went wrong")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
 	err = respondWithJSON(w, 200, UserResponse{
-		ID:        user.ID,
-		CreatedAt: user.CreatedAt,
-		UpdatedAt: user.UpdatedAt,
-		Email:     user.Email,
-		Token:     token,
+		ID:           user.ID,
+		CreatedAt:    user.CreatedAt,
+		UpdatedAt:    user.UpdatedAt,
+		Email:        user.Email,
+		Token:        token,
+		RefreshToken: r.Token,
 	})
 	if err != nil {
 		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+	}
+}
+
+func (cfg *apiConfig) handleRefreshToken(w http.ResponseWriter, req *http.Request) {
+	token, err := auth.GetBearerToken(req.Header)
+	if err != nil {
+		log.Printf("Error retrieving refresh token from headers: %s", err)
+		err = respondWithError(w, 500, "Something went wrong")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
+	userId, err := cfg.dbQueries.GetUserFromRefreshToken(req.Context(), token)
+	if err != nil {
+		log.Printf("Token missing or expired: %s", err)
+		err = respondWithError(w, 401, "Invalid token")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
+	t, err := auth.MakeJWT(userId, cfg.jwtSecret, time.Hour)
+	if err != nil {
+		log.Printf("Error creating JWT: %s", err)
+		err = respondWithError(w, 500, "Something went wrong")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
+	err = respondWithJSON(w, 200, RefreshResponse{
+		Token: t,
+	})
+	if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+	}
+}
+
+func (cfg *apiConfig) handleRevokeToken(w http.ResponseWriter, req *http.Request) {
+	token, err := auth.GetBearerToken(req.Header)
+	if err != nil {
+		log.Printf("Error retrieving refresh token from headers: %s", err)
+		err = respondWithError(w, 500, "Something went wrong")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
+	err = cfg.dbQueries.RevokeRefreshToken(req.Context(), token)
+	if err != nil {
+		log.Printf("Error revoking token in DB: %s", err)
+		err = respondWithError(w, 500, "Something went wrong")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
+	err = respondWithJSON(w, 204, nil)
+	if err != nil {
+		log.Printf("Error responding with 204: %s", err)
 		w.WriteHeader(500)
 	}
 }
@@ -349,6 +442,8 @@ func main() {
 	mux.HandleFunc("GET /api/chirps/{chirp_id}", apiCfg.handleGetChirpById)
 	mux.HandleFunc("POST /api/chirps", apiCfg.handleCreateChirp)
 	mux.HandleFunc("POST /api/login", apiCfg.handleUserLogin)
+	mux.HandleFunc("POST /api/refresh", apiCfg.handleRefreshToken)
+	mux.HandleFunc("POST /api/revoke", apiCfg.handleRevokeToken)
 	mux.HandleFunc("POST /api/users", apiCfg.handleCreateUser)
 	server := http.Server{
 		Addr:    ":8080",
