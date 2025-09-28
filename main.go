@@ -421,6 +421,85 @@ func (cfg *apiConfig) handleRevokeToken(w http.ResponseWriter, req *http.Request
 	}
 }
 
+func (cfg *apiConfig) handleUpdateUser(w http.ResponseWriter, req *http.Request) {
+	token, err := auth.GetBearerToken(req.Header)
+	if err != nil {
+		log.Printf("Error retrieving refresh token from headers: %s", err)
+		err = respondWithError(w, 401, "Invalid token")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
+	id, err := auth.ValidateJWT(token, cfg.jwtSecret)
+	if err != nil {
+		log.Printf("Error validating JWT: %s", err)
+		err = respondWithError(w, 401, "Unauthorized")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
+	decoder := json.NewDecoder(req.Body)
+	u := User{}
+	err = decoder.Decode(&u)
+	if err != nil {
+		log.Printf("Error decoding parameters: %s", err)
+		err = respondWithError(w, 500, "Something went wrong 1")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
+	hashedPassword, err := auth.HashPassword(u.Password)
+	if err != nil {
+		log.Printf("Error hashing password: %s", err)
+		err = respondWithError(w, 500, "Something went wrong 2")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
+	err = cfg.dbQueries.UpdateUserDetails(req.Context(), database.UpdateUserDetailsParams{
+		Email:          u.Email,
+		HashedPassword: hashedPassword,
+		ID:             id,
+	})
+	if err != nil {
+		log.Printf("Error updating user details: %s", err)
+		err = respondWithError(w, 500, "Something went wrong 3")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
+	user, err := cfg.dbQueries.GetUserByEmail(req.Context(), u.Email)
+	if err != nil {
+		log.Printf("Error retrieving user: %s", err)
+		err = respondWithError(w, 500, "Something went wrong 4")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
+	err = respondWithJSON(w, 200, UserResponse{
+		ID:        user.ID,
+		Email:     user.Email,
+		CreatedAt: user.CreatedAt,
+		UpdatedAt: user.UpdatedAt,
+	})
+	if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+	}
+}
+
 func main() {
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
@@ -445,6 +524,7 @@ func main() {
 	mux.HandleFunc("POST /api/refresh", apiCfg.handleRefreshToken)
 	mux.HandleFunc("POST /api/revoke", apiCfg.handleRevokeToken)
 	mux.HandleFunc("POST /api/users", apiCfg.handleCreateUser)
+	mux.HandleFunc("PUT /api/users", apiCfg.handleUpdateUser)
 	server := http.Server{
 		Addr:    ":8080",
 		Handler: mux,
