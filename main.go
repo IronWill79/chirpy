@@ -43,10 +43,18 @@ type UserResponse struct {
 	Email        string    `json:"email"`
 	Token        string    `json:"token"`
 	RefreshToken string    `json:"refresh_token"`
+	IsChirpyRed  bool      `json:"is_chirpy_red"`
 }
 
 type RefreshResponse struct {
 	Token string `json:"token"`
+}
+
+type PolkaRequestBody struct {
+	Event string `json:"event"`
+	Data  struct {
+		UserID uuid.UUID `json:"user_id"`
+	} `json:"data"`
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -107,10 +115,11 @@ func (cfg *apiConfig) handleCreateUser(w http.ResponseWriter, req *http.Request)
 		return
 	}
 	respBody := UserResponse{
-		ID:        user.ID,
-		CreatedAt: user.CreatedAt,
-		UpdatedAt: user.UpdatedAt,
-		Email:     user.Email,
+		ID:          user.ID,
+		CreatedAt:   user.CreatedAt,
+		UpdatedAt:   user.UpdatedAt,
+		Email:       user.Email,
+		IsChirpyRed: user.IsChirpyRed.Bool,
 	}
 	err = respondWithJSON(w, 201, respBody)
 	if err != nil {
@@ -346,6 +355,7 @@ func (cfg *apiConfig) handleUserLogin(w http.ResponseWriter, req *http.Request) 
 		Email:        user.Email,
 		Token:        token,
 		RefreshToken: r.Token,
+		IsChirpyRed:  user.IsChirpyRed.Bool,
 	})
 	if err != nil {
 		log.Printf("Error marshalling JSON: %s", err)
@@ -489,10 +499,11 @@ func (cfg *apiConfig) handleUpdateUser(w http.ResponseWriter, req *http.Request)
 		return
 	}
 	err = respondWithJSON(w, 200, UserResponse{
-		ID:        user.ID,
-		Email:     user.Email,
-		CreatedAt: user.CreatedAt,
-		UpdatedAt: user.UpdatedAt,
+		ID:          user.ID,
+		Email:       user.Email,
+		CreatedAt:   user.CreatedAt,
+		UpdatedAt:   user.UpdatedAt,
+		IsChirpyRed: user.IsChirpyRed.Bool,
 	})
 	if err != nil {
 		log.Printf("Error marshalling JSON: %s", err)
@@ -568,6 +579,45 @@ func (cfg *apiConfig) handleDeleteChirpById(w http.ResponseWriter, req *http.Req
 	}
 }
 
+func (cfg *apiConfig) handlePolkaWebhook(w http.ResponseWriter, req *http.Request) {
+	decoder := json.NewDecoder(req.Body)
+	p := PolkaRequestBody{}
+	err := decoder.Decode(&p)
+	if err != nil {
+		log.Printf("Error decoding parameters: %s", err)
+		err = respondWithError(w, 500, "Something went wrong 1")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
+	if p.Event != "user.upgraded" {
+		log.Printf("Invalid event: %s", p.Event)
+		err = respondWithError(w, 204, "Invalid event")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
+	err = cfg.dbQueries.UpgradeUserToChirpyRed(req.Context(), p.Data.UserID)
+	if err != nil {
+		log.Printf("Error upgrading user: %s", err)
+		err = respondWithError(w, 404, "Something went wrong")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
+	err = respondWithJSON(w, 204, nil)
+	if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+	}
+}
+
 func main() {
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
@@ -590,6 +640,7 @@ func main() {
 	mux.HandleFunc("DELETE /api/chirps/{chirp_id}", apiCfg.handleDeleteChirpById)
 	mux.HandleFunc("POST /api/chirps", apiCfg.handleCreateChirp)
 	mux.HandleFunc("POST /api/login", apiCfg.handleUserLogin)
+	mux.HandleFunc("POST /api/polka/webhooks", apiCfg.handlePolkaWebhook)
 	mux.HandleFunc("POST /api/refresh", apiCfg.handleRefreshToken)
 	mux.HandleFunc("POST /api/revoke", apiCfg.handleRevokeToken)
 	mux.HandleFunc("POST /api/users", apiCfg.handleCreateUser)
