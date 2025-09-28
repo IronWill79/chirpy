@@ -500,6 +500,74 @@ func (cfg *apiConfig) handleUpdateUser(w http.ResponseWriter, req *http.Request)
 	}
 }
 
+func (cfg *apiConfig) handleDeleteChirpById(w http.ResponseWriter, req *http.Request) {
+	token, err := auth.GetBearerToken(req.Header)
+	if err != nil {
+		log.Printf("Error retrieving refresh token from headers: %s", err)
+		err = respondWithError(w, 401, "Invalid token")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
+	id, err := auth.ValidateJWT(token, cfg.jwtSecret)
+	if err != nil {
+		log.Printf("Error validating JWT: %s", err)
+		err = respondWithError(w, 401, "Unauthorized")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
+	id_string := req.PathValue("chirp_id")
+	chirp_id, err := uuid.Parse(id_string)
+	if err != nil {
+		log.Printf("Error parsing UUID: %s", err)
+		err = respondWithError(w, 500, "Something went wrong")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
+	c, err := cfg.dbQueries.GetChirpById(req.Context(), chirp_id)
+	if err != nil {
+		log.Printf("Error retrieving chirp: %s", err)
+		err = respondWithError(w, 404, "Something went wrong")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
+	if c.UserID != id {
+		log.Printf("User not the author of the chirp: %s", err)
+		err = respondWithError(w, 403, "Unauthorized")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
+	err = cfg.dbQueries.DeleteChirpById(req.Context(), c.ID)
+	if err != nil {
+		log.Printf("Error deleting chirp: %s", err)
+		err = respondWithError(w, 500, "Something went wrong")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
+	err = respondWithJSON(w, 204, nil)
+	if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+	}
+}
+
 func main() {
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
@@ -519,6 +587,7 @@ func main() {
 	mux.HandleFunc("GET /api/healthz", readinessHandler)
 	mux.HandleFunc("GET /api/chirps", apiCfg.handleListChirps)
 	mux.HandleFunc("GET /api/chirps/{chirp_id}", apiCfg.handleGetChirpById)
+	mux.HandleFunc("DELETE /api/chirps/{chirp_id}", apiCfg.handleDeleteChirpById)
 	mux.HandleFunc("POST /api/chirps", apiCfg.handleCreateChirp)
 	mux.HandleFunc("POST /api/login", apiCfg.handleUserLogin)
 	mux.HandleFunc("POST /api/refresh", apiCfg.handleRefreshToken)
