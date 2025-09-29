@@ -151,30 +151,64 @@ func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) error
 }
 
 func (cfg *apiConfig) handleListChirps(w http.ResponseWriter, req *http.Request) {
-	chirps, err := cfg.dbQueries.ListChirps(req.Context())
-	if err != nil {
-		log.Printf("Error getting chirps: %s", err)
-		err = respondWithError(w, 500, "Something went wrong")
+	vars := req.URL.Query()
+	authorIdString := vars.Get("author_id")
+	if authorIdString != "" {
+		authorId, err := uuid.Parse(authorIdString)
+		if err != nil {
+			log.Printf("Error parsing UUID: %s", err)
+		}
+		chirps, err := cfg.dbQueries.ListChirpsFromAuthor(req.Context(), authorId)
+		if err != nil {
+			log.Printf("Error getting chirps: %s", err)
+			err = respondWithError(w, 500, "Something went wrong")
+			if err != nil {
+				log.Printf("Error marshalling JSON: %s", err)
+				w.WriteHeader(500)
+			}
+			return
+		}
+		respBody := []chirp.Chirp{}
+		for _, c := range chirps {
+			respBody = append(respBody, chirp.Chirp{
+				ID:        c.ID,
+				CreatedAt: c.CreatedAt,
+				UpdatedAt: c.UpdatedAt,
+				Body:      c.Body,
+				UserID:    c.UserID,
+			})
+		}
+		err = respondWithJSON(w, 200, respBody)
 		if err != nil {
 			log.Printf("Error marshalling JSON: %s", err)
 			w.WriteHeader(500)
 		}
-		return
-	}
-	respBody := []chirp.Chirp{}
-	for _, c := range chirps {
-		respBody = append(respBody, chirp.Chirp{
-			ID:        c.ID,
-			CreatedAt: c.CreatedAt,
-			UpdatedAt: c.UpdatedAt,
-			Body:      c.Body,
-			UserID:    c.UserID,
-		})
-	}
-	err = respondWithJSON(w, 200, respBody)
-	if err != nil {
-		log.Printf("Error marshalling JSON: %s", err)
-		w.WriteHeader(500)
+	} else {
+		chirps, err := cfg.dbQueries.ListChirps(req.Context())
+		if err != nil {
+			log.Printf("Error getting chirps: %s", err)
+			err = respondWithError(w, 500, "Something went wrong")
+			if err != nil {
+				log.Printf("Error marshalling JSON: %s", err)
+				w.WriteHeader(500)
+			}
+			return
+		}
+		respBody := []chirp.Chirp{}
+		for _, c := range chirps {
+			respBody = append(respBody, chirp.Chirp{
+				ID:        c.ID,
+				CreatedAt: c.CreatedAt,
+				UpdatedAt: c.UpdatedAt,
+				Body:      c.Body,
+				UserID:    c.UserID,
+			})
+		}
+		err = respondWithJSON(w, 200, respBody)
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
 	}
 }
 
