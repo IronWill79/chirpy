@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"sync/atomic"
 	"time"
 
@@ -153,6 +154,16 @@ func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) error
 func (cfg *apiConfig) handleListChirps(w http.ResponseWriter, req *http.Request) {
 	vars := req.URL.Query()
 	authorIdString := vars.Get("author_id")
+	sortParam := vars.Get("sort")
+	if sortParam != "" && sortParam != "asc" && sortParam != "desc" {
+		log.Printf("Invalid sort parameter")
+		err := respondWithError(w, 500, "Something went wrong")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
 	if authorIdString != "" {
 		authorId, err := uuid.Parse(authorIdString)
 		if err != nil {
@@ -167,6 +178,9 @@ func (cfg *apiConfig) handleListChirps(w http.ResponseWriter, req *http.Request)
 				w.WriteHeader(500)
 			}
 			return
+		}
+		if sortParam == "desc" {
+			sort.Slice(chirps, func(i, j int) bool { return chirps[i].CreatedAt.After(chirps[j].CreatedAt) })
 		}
 		respBody := []chirp.Chirp{}
 		for _, c := range chirps {
@@ -193,6 +207,9 @@ func (cfg *apiConfig) handleListChirps(w http.ResponseWriter, req *http.Request)
 				w.WriteHeader(500)
 			}
 			return
+		}
+		if sortParam == "desc" {
+			sort.Slice(chirps, func(i, j int) bool { return chirps[i].CreatedAt.After(chirps[j].CreatedAt) })
 		}
 		respBody := []chirp.Chirp{}
 		for _, c := range chirps {
