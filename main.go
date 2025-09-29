@@ -29,6 +29,7 @@ type apiConfig struct {
 	dbQueries      *database.Queries
 	fileserverHits atomic.Int32
 	jwtSecret      string
+	polkaKey       string
 }
 
 type User struct {
@@ -580,9 +581,19 @@ func (cfg *apiConfig) handleDeleteChirpById(w http.ResponseWriter, req *http.Req
 }
 
 func (cfg *apiConfig) handlePolkaWebhook(w http.ResponseWriter, req *http.Request) {
+	apiKey, err := auth.GetAPIKey(req.Header)
+	if err != nil || apiKey != cfg.polkaKey {
+		log.Printf("Invalid or missing API key: %s", err)
+		err = respondWithError(w, 401, "invalid API key")
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+		}
+		return
+	}
 	decoder := json.NewDecoder(req.Body)
 	p := PolkaRequestBody{}
-	err := decoder.Decode(&p)
+	err = decoder.Decode(&p)
 	if err != nil {
 		log.Printf("Error decoding parameters: %s", err)
 		err = respondWithError(w, 500, "Something went wrong 1")
@@ -622,12 +633,13 @@ func main() {
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
 	jwtSecret := os.Getenv("JWT_SECRET")
+	polkaKey := os.Getenv("POLKA_KEY")
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		fmt.Printf("Error connecting to database: %v\n", err)
 	}
 	dbQueries := database.New(db)
-	apiCfg := apiConfig{dbQueries: dbQueries, jwtSecret: jwtSecret}
+	apiCfg := apiConfig{dbQueries: dbQueries, jwtSecret: jwtSecret, polkaKey: polkaKey}
 	mux := http.NewServeMux()
 	mux.Handle("/app/",
 		apiCfg.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir(".")))),
